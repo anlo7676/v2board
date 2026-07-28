@@ -14,16 +14,69 @@ class TelegramService {
         $this->api = 'https://api.telegram.org/bot' . config('v2board.telegram_bot_token', $token) . '/';
     }
 
-    public function sendMessage(int $chatId, string $text, string $parseMode = '')
+    public function sendMessage(int $chatId, string $text, string $parseMode = '', $replyMarkup = null)
     {
         if ($parseMode === 'markdown') {
             $text = str_replace('_', '\_', $text);
         }
-        $this->request('sendMessage', [
+        $params = [
             'chat_id' => $chatId,
             'text' => $text,
             'parse_mode' => $parseMode
-        ]);
+        ];
+        if ($replyMarkup) {
+            $params['reply_markup'] = json_encode($replyMarkup);
+        }
+        $this->request('sendMessage', $params, (bool)$replyMarkup);
+    }
+
+    public function editMessageText(int $chatId, int $messageId, string $text, $replyMarkup = null, string $parseMode = '')
+    {
+        if ($parseMode === 'markdown') {
+            $text = str_replace('_', '\_', $text);
+        }
+        $params = [
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+            'text' => $text,
+            'parse_mode' => $parseMode
+        ];
+        if ($replyMarkup) {
+            $params['reply_markup'] = json_encode($replyMarkup);
+        }
+        try {
+            $this->request('editMessageText', $params, (bool)$replyMarkup);
+        } catch (\Exception $e) {
+            // 内容未变化时 TG 会报 message is not modified，可安全忽略
+            if (strpos($e->getMessage(), 'not modified') === false) {
+                throw $e;
+            }
+        }
+    }
+
+    public function answerCallbackQuery(string $callbackQueryId, string $text = '', bool $showAlert = false)
+    {
+        try {
+            $this->request('answerCallbackQuery', [
+                'callback_query_id' => $callbackQueryId,
+                'text' => $text,
+                'show_alert' => $showAlert ? 'true' : 'false'
+            ]);
+        } catch (\Exception $e) {
+            // 应答失败（如回调已过期）不影响主流程
+        }
+    }
+
+    public function deleteMessage(int $chatId, int $messageId)
+    {
+        try {
+            $this->request('deleteMessage', [
+                'chat_id' => $chatId,
+                'message_id' => $messageId
+            ]);
+        } catch (\Exception $e) {
+            // 删除失败不影响主流程
+        }
     }
 
     public function approveChatJoinRequest(int $chatId, int $userId)
@@ -108,10 +161,14 @@ class TelegramService {
         ]);
     }
 
-    private function request(string $method, array $params = [])
+    private function request(string $method, array $params = [], bool $post = false)
     {
         $curl = new Curl();
-        $curl->get($this->api . $method . '?' . http_build_query($params));
+        if ($post) {
+            $curl->post($this->api . $method, $params);
+        } else {
+            $curl->get($this->api . $method . '?' . http_build_query($params));
+        }
         $response = $curl->response;
         $curl->close();
         if (!isset($response->ok)) abort(500, '请求失败');

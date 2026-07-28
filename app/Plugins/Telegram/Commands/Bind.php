@@ -66,13 +66,7 @@ class Bind extends Telegram {
         if (!$user) {
             abort(500, '用户不存在');
         }
-        if ($user->telegram_id) {
-            abort(500, '该账号已经绑定了Telegram账号');
-        }
-        $user->telegram_id = $message->chat_id;
-        if (!$user->save()) {
-            abort(500, '设置失败');
-        }
+        $this->bindTelegram($user, $message->chat_id);
         $telegramService = $this->telegramService;
         $telegramService->sendMessage($message->chat_id, '绑定成功');
     }

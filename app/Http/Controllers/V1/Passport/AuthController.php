@@ -221,15 +221,10 @@ class AuthController extends Controller
         $user = AuthService::decryptAuthData($authorization);
         if (!$user) abort(403, '未登录或登陆已过期');
 
-        $code = Helper::guid();
-        $key = CacheKey::get('TEMP_TOKEN', $code);
-        Cache::put($key, $user['id'], 60);
-        $redirect = '/#/login?verify=' . $code . '&redirect=' . ($request->input('redirect') ? $request->input('redirect') : 'dashboard');
-        if (config('v2board.app_url')) {
-            $url = config('v2board.app_url') . $redirect;
-        } else {
-            $url = url($redirect);
-        }
+        $url = AuthService::generateTempLoginUrl(
+            $user['id'],
+            $request->input('redirect') ? $request->input('redirect') : 'dashboard'
+        );
         return response([
             'data' => $url
         ]);
