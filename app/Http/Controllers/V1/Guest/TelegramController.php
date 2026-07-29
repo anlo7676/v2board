@@ -26,9 +26,15 @@ class TelegramController extends Controller
 
     public function webhook(Request $request)
     {
-        $this->formatMessage($request->input());
-        $this->formatCallbackQuery($request->input());
-        $this->formatChatJoinRequest($request->input());
+        $data = $request->input();
+        // 同一 update 去重：webhook 响应慢或非 2xx 时 Telegram 会重投同一 update，
+        // 不去重会重复处理（如重复发送验证码邮件、重复下单）。Cache::add 原子，可防并发重投竞态
+        if (isset($data['update_id']) && !Cache::add('TG_UPDATE_' . $data['update_id'], 1, 3600)) {
+            return;
+        }
+        $this->formatMessage($data);
+        $this->formatCallbackQuery($data);
+        $this->formatChatJoinRequest($data);
         $this->handle();
     }
 
