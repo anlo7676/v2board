@@ -98,7 +98,10 @@ class Buy extends Telegram {
             abort(500, '该订阅暂无可购买的周期');
         }
         $keyboard[] = [['text' => '« 返回订阅列表', 'callback_data' => 'buy']];
-        $text = "订阅：{$plan->name}\n流量：{$plan->transfer_enable} GB\n———————————————\n请选择购买周期：";
+        // 设备/速率限制为 NULL 表示不限制
+        $deviceLimit = $plan->device_limit !== NULL ? "{$plan->device_limit} 台" : '不限制';
+        $speedLimit = $plan->speed_limit !== NULL ? "{$plan->speed_limit} Mbps" : '不限制';
+        $text = "订阅：{$plan->name}\n流量：{$plan->transfer_enable} GB\n设备限制：{$deviceLimit}\n速率限制：{$speedLimit}\n———————————————\n请选择购买周期：";
         $this->telegramService->editMessageText($message->chat_id, $message->message_id, $text, ['inline_keyboard' => $keyboard]);
     }
 
