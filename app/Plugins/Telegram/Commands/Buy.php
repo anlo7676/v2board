@@ -105,6 +105,6 @@ class Buy extends Telegram {
     {
         $orderService = new TelegramOrderService();
         $result = $orderService->createAndCheckout($user, $planId, $period);
-        $this->telegramService->sendMessage($message->chat_id, $orderService->buildResultMessage($result));
+        $this->telegramService->sendMessage($message->chat_id, $orderService->buildResultMessage($result), '', $orderService->buildResultMarkup($result));
     }
 }

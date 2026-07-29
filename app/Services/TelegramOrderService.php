@@ -166,6 +166,31 @@ class TelegramOrderService
             return "下单成功，已使用余额支付，订阅正在开通中\n订单号：{$result['trade_no']}";
         }
         $amount = sprintf('%.2f', $result['total_amount'] / 100);
-        return "订单创建成功\n———————————————\n订单号：{$result['trade_no']}\n待支付金额：{$amount} 元\n请在2小时内完成支付（超时自动取消）：\n{$result['pay_url']}";
+        $text = "订单创建成功\n———————————————\n订单号：{$result['trade_no']}\n待支付金额：{$amount} 元\n";
+        if ($this->isValidPayUrl($result['pay_url'])) {
+            $text .= "请在2小时内点击下方按钮完成支付（超时自动取消）";
+        } else {
+            // 支付链接非合法 http(s) 绝对地址时无法用按钮，退化为文本附带链接
+            $text .= "请在2小时内打开以下链接完成支付（超时自动取消）：\n{$result['pay_url']}";
+        }
+        return $text;
+    }
+
+    public function buildResultMarkup(array $result)
+    {
+        if (($result['status'] ?? '') !== 'pending') return null;
+        if (!$this->isValidPayUrl($result['pay_url'])) return null;
+        return [
+            'inline_keyboard' => [
+                [['text' => '去支付', 'url' => $result['pay_url']]]
+            ]
+        ];
+    }
+
+    private function isValidPayUrl($url): bool
+    {
+        return is_string($url)
+            && filter_var($url, FILTER_VALIDATE_URL) !== false
+            && preg_match('#^https?://#i', $url) === 1;
     }
 }
