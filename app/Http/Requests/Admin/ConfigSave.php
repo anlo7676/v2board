@@ -81,6 +81,7 @@ class ConfigSave extends FormRequest
         'telegram_discuss_id' => '',
         'telegram_channel_id' => '',
         'telegram_discuss_link' => 'nullable|url',
+        'telegram_payment_domain' => 'nullable|url',
         // app
         'windows_version' => '',
         'windows_download_url' => '',
@@ -137,6 +138,7 @@ class ConfigSave extends FormRequest
             'server_token.min' => '通讯密钥长度必须大于16位',
             'tos_url.url' => '服务条款URL格式不正确，必须携带http(s)://',
             'telegram_discuss_link.url' => 'Telegram群组地址必须为URL格式，必须携带http(s)://',
+            'telegram_payment_domain.url' => 'TG支付域名格式不正确，必须携带http(s)://',
             'logo.url' => 'LOGO URL格式不正确，必须携带https(s)://',
             'secure_path.min' => '后台路径长度最小为8位',
             'secure_path.regex' => '后台路径只能为字母或数字',

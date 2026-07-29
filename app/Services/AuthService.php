@@ -39,14 +39,15 @@ class AuthService
         ];
     }
 
-    public static function generateTempLoginUrl($userId, string $redirect = 'dashboard'): string
+    public static function generateTempLoginUrl($userId, string $redirect = 'dashboard', string $baseUrl = ''): string
     {
         $code = Helper::guid();
         $key = CacheKey::get('TEMP_TOKEN', $code);
         Cache::put($key, $userId, 60);
         $redirectPath = '/#/login?verify=' . $code . '&redirect=' . $redirect;
-        if (config('v2board.app_url')) {
-            return config('v2board.app_url') . $redirectPath;
+        $base = $baseUrl ?: config('v2board.app_url');
+        if ($base) {
+            return rtrim($base, '/') . $redirectPath;
         }
         return url($redirectPath);
     }

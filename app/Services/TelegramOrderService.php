@@ -97,6 +97,8 @@ class TelegramOrderService
             $order->period = $period;
             $order->trade_no = Helper::generateOrderNo();
             $order->total_amount = $plan[$period];
+            // 显式置为待支付，避免内存模型 status 为 NULL 导致 OrderService::paid() 的 `status !== 0` 判断误返回（不开通）
+            $order->status = 0;
 
             $orderService->setVipDiscount($user);
             $orderService->setOrderType($user);
@@ -147,12 +149,14 @@ class TelegramOrderService
             ];
         }
 
+        // TG 机器人下单优先使用后台单独配置的支付域名，未配置时回退到站点网址
         $payRedirect = '/#/order/' . $order->trade_no;
+        $payDomain = config('v2board.telegram_payment_domain') ?: config('v2board.app_url');
         return [
             'status' => 'pending',
             'trade_no' => $order->trade_no,
             'total_amount' => $order->total_amount,
-            'pay_url' => config('v2board.app_url') ? config('v2board.app_url') . $payRedirect : url($payRedirect)
+            'pay_url' => $payDomain ? rtrim($payDomain, '/') . $payRedirect : url($payRedirect)
         ];
     }
 
