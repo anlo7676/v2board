@@ -102,14 +102,19 @@ class TelegramService {
 
     public function setWebhook(string $url)
     {
-        $commands = $this->discoverCommands(base_path('app/Plugins/Telegram/Commands'));
-        $this->setMyCommands($commands);
+        $dir = base_path('app/Plugins/Telegram/Commands');
+        // 私聊显示完整菜单
+        $this->setMyCommands($this->discoverCommands($dir, 'guest', 'private'), ['type' => 'all_private_chats']);
+        // 群组仅显示群内可用命令，隐藏所有需私聊的命令
+        $this->setMyCommands($this->discoverCommands($dir, 'guest', 'group'), ['type' => 'all_group_chats']);
+        // 清除历史默认作用域菜单，避免旧命令残留在群组等场景
+        $this->deleteMyCommands();
         return $this->request('setWebhook', [
             'url' => $url
         ]);
     }
 
-    public function discoverCommands(string $directory, string $audience = 'guest'): array
+    public function discoverCommands(string $directory, string $audience = 'guest', string $chatType = 'private'): array
     {
         $commands = [];
 
@@ -150,8 +155,22 @@ class TelegramService {
                             ? $scopeProp->getValue()
                             : $ref->newInstanceWithoutConstructor()->menuScope;
                     }
-                    if ($menuScope === 'none') continue;
-                    if ($menuScope !== 'all' && $menuScope !== $audience) continue;
+                    // 是否在群组菜单显示（默认否，即仅私聊可用）
+                    $groupVisible = false;
+                    if ($ref->hasProperty('groupVisible')) {
+                        $groupProp = $ref->getProperty('groupVisible');
+                        $groupVisible = $groupProp->isStatic()
+                            ? $groupProp->getValue()
+                            : $ref->newInstanceWithoutConstructor()->groupVisible;
+                    }
+                    if ($chatType === 'group') {
+                        // 群组菜单：仅保留群内可用命令
+                        if (!$groupVisible) continue;
+                    } else {
+                        // 私聊菜单：按绑定状态分层
+                        if ($menuScope === 'none') continue;
+                        if ($menuScope !== 'all' && $menuScope !== $audience) continue;
+                    }
 
                     $sort = 999;
                     if ($ref->hasProperty('sort')) {
