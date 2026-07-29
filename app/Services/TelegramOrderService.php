@@ -42,6 +42,9 @@ class TelegramOrderService
         4 => '已抵扣'
     ];
 
+    // 需前端采集客户端 token（如 Stripe.js 卡信息）的网关，TG 内无法采集，不可选
+    CONST CLIENT_TOKEN_PAYMENTS = ['StripeCredit'];
+
     /**
      * 创建订单并结算（镜像 User\OrderController::save + checkout 的核心逻辑）
      * 余额足额自动开通，否则返回网页支付链接
@@ -176,8 +179,8 @@ class TelegramOrderService
      */
     public function checkout(User $user, string $tradeNo, int $paymentId): array
     {
-        // 与下单共用用户级锁，避免重复点击导致并发重复发起支付
-        $lock = Cache::lock('TELEGRAM_ORDER_LOCK_' . $user->id, 10);
+        // 与下单共用用户级锁防重复点击并发；TTL 需覆盖网关外部 HTTP 调用耗时，避免锁提前过期后重入
+        $lock = Cache::lock('TELEGRAM_ORDER_LOCK_' . $user->id, 60);
         if (!$lock->get()) {
             abort(500, '操作过于频繁，请稍后再试');
         }
@@ -198,7 +201,7 @@ class TelegramOrderService
                 return ['type' => -1, 'data' => true, 'trade_no' => $tradeNo];
             }
             $payment = Payment::find($paymentId);
-            if (!$payment || $payment->enable !== 1) {
+            if (!$payment || $payment->enable !== 1 || in_array($payment->payment, self::CLIENT_TOKEN_PAYMENTS)) {
                 abort(500, '该支付方式不可用，请重新选择');
             }
             $paymentService = new PaymentService($payment->payment, $payment->id);
@@ -215,7 +218,9 @@ class TelegramOrderService
                 'trade_no' => $tradeNo,
                 'total_amount' => $payAmount,
                 'user_id' => $order->user_id,
-                'stripe_token' => null
+                'stripe_token' => null,
+                // 支付完成后回跳到用户访问域名的订单页，避免 webhook 域名≠站点域名时回跳到错误地址
+                'return_url' => self::buildPayUrl($tradeNo)
             ]);
             return [
                 'type' => $result['type'],
@@ -267,6 +272,7 @@ class TelegramOrderService
     public function buildPaymentSelectMarkup(string $tradeNo)
     {
         $payments = Payment::where('enable', 1)
+            ->whereNotIn('payment', self::CLIENT_TOKEN_PAYMENTS)
             ->orderBy('sort', 'ASC')
             ->get();
         if ($payments->isEmpty()) return null;
@@ -288,8 +294,12 @@ class TelegramOrderService
 
     public function buildCheckoutMessage(array $checkout): string
     {
-        if ($checkout['type'] === -1) {
+        // type -1：免支付直接开通；type 2：网关同步扣款，data 为真即已扣款成功
+        if ($checkout['type'] === -1 || ($checkout['type'] === 2 && $checkout['data'])) {
             return "订单已支付完成，订阅正在开通中\n订单号：{$checkout['trade_no']}\n开通完成后会在此通知您。";
+        }
+        if ($checkout['type'] === 2) {
+            return "支付未成功，请重新选择支付方式\n订单号：{$checkout['trade_no']}";
         }
         $amount = sprintf('%.2f', $checkout['pay_amount'] / 100);
         $text = "订单号：{$checkout['trade_no']}\n支付方式：{$checkout['payment_name']}\n应付金额：{$amount} 元\n———————————————\n";
@@ -307,7 +317,8 @@ class TelegramOrderService
 
     public function buildCheckoutMarkup(array $checkout)
     {
-        if ($checkout['type'] === -1) return null;
+        // 已支付完成（免支付或同步扣款成功）不再出任何支付按钮，避免重复扣款
+        if ($checkout['type'] === -1 || ($checkout['type'] === 2 && $checkout['data'])) return null;
         $rows = [];
         if ($this->isValidPayUrl($checkout['data'])) {
             $rows[] = [['text' => '去支付', 'url' => $checkout['data']]];
@@ -318,7 +329,9 @@ class TelegramOrderService
 
     private function hasEnabledPayment(): bool
     {
-        return Payment::where('enable', 1)->exists();
+        return Payment::where('enable', 1)
+            ->whereNotIn('payment', self::CLIENT_TOKEN_PAYMENTS)
+            ->exists();
     }
 
     // 生成 TG 机器人下单的网页支付链接：优先使用后台单独配置的支付域名，未配置时回退到站点网址

@@ -39,10 +39,16 @@ class Pay extends Telegram {
     {
         $order = Order::where('trade_no', $tradeNo)
             ->where('user_id', $user->id)
-            ->where('status', 0)
             ->first();
         if (!$order) {
-            abort(500, '订单不存在或已支付');
+            abort(500, '订单不存在');
+        }
+        // 订单已支付/已取消时编辑原消息并清除键盘，避免旧消息残留按钮点击报错
+        if ((int)$order->status !== 0) {
+            $statusName = TelegramOrderService::ORDER_STATUS_NAMES[$order->status] ?? '未知';
+            $this->telegramService->editMessageText($message->chat_id, $message->message_id,
+                "订单号：{$tradeNo}\n当前状态：{$statusName}\n该订单已无需支付。");
+            return;
         }
         $orderService = new TelegramOrderService();
         $amount = sprintf('%.2f', $order->total_amount / 100);

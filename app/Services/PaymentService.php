@@ -47,7 +47,8 @@ class PaymentService
 
         return $this->payment->pay([
             'notify_url' => $notifyUrl,
-            'return_url' => url('/#/order/' . $order['trade_no']),
+            // 允许调用方覆盖回跳地址（如 TG 机器人场景需回跳到用户访问域名），未传时保持原行为
+            'return_url' => $order['return_url'] ?? url('/#/order/' . $order['trade_no']),
             'trade_no' => $order['trade_no'],
             'total_amount' => $order['total_amount'],
             'user_id' => $order['user_id'],
