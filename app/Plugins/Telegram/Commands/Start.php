@@ -28,13 +28,14 @@ class Start extends Telegram {
         $lines[] = "请点击下方按钮操作，或使用以下命令：";
         if (!$user) {
             $lines[] = "/register 注册账号";
-            $lines[] = "/login 登录、获取免密登录链接";
+            $lines[] = "/login 登录并绑定账号";
         }
         $lines[] = "/buy 购买订阅";
         $lines[] = "/renew 续费当前订阅";
         $lines[] = "/reset 购买流量重置包";
         $lines[] = "/traffic 查询流量";
         if ($user) {
+            $lines[] = "/subscribe 获取/重置订阅链接";
             $lines[] = "/unbind 解绑账号";
         }
         $lines[] = "/cancel 取消当前操作";
@@ -52,6 +53,11 @@ class Start extends Telegram {
             ['text' => '续费', 'callback_data' => 'renew'],
             ['text' => '重置流量', 'callback_data' => 'reset']
         ];
+        if ($user) {
+            $rows[] = [
+                ['text' => '订阅链接', 'callback_data' => 'subscribe']
+            ];
+        }
 
         $telegramService->sendMessage($message->chat_id, $text, '', ['inline_keyboard' => $rows]);
     }
