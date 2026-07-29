@@ -50,17 +50,13 @@ class Orders extends Telegram {
 
         $markup = null;
         if ($pendingTradeNo) {
-            $payUrl = TelegramOrderService::buildPayUrl($pendingTradeNo);
-            if (preg_match('#^https?://#i', $payUrl)) {
-                $lines[] = '您有待支付订单，可点击下方按钮完成支付';
-                $markup = [
-                    'inline_keyboard' => [
-                        [['text' => '去支付', 'url' => $payUrl]]
-                    ]
-                ];
-            } else {
-                $lines[] = "您有待支付订单，可打开以下链接完成支付：\n{$payUrl}";
-            }
+            // 在机器人内选择支付方式直接发起支付，不再跳转网页订单页
+            $lines[] = '您有待支付订单，可点击下方按钮选择支付方式完成支付';
+            $markup = [
+                'inline_keyboard' => [
+                    [['text' => '去支付', 'callback_data' => 'pay:' . $pendingTradeNo]]
+                ]
+            ];
         }
 
         // 纯文本发送：订单号/链接可能含下划线，markdown 转义会破坏内容

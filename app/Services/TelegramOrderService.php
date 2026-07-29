@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Order;
+use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
 use App\Utils\Helper;
@@ -169,6 +170,65 @@ class TelegramOrderService
         ];
     }
 
+    /**
+     * 选择支付方式后发起支付（镜像 User\OrderController::checkout 的核心逻辑）
+     * 返回网关结果：type 1=跳转链接 0=二维码内容 -1=余额已抵扣直接开通
+     */
+    public function checkout(User $user, string $tradeNo, int $paymentId): array
+    {
+        // 与下单共用用户级锁，避免重复点击导致并发重复发起支付
+        $lock = Cache::lock('TELEGRAM_ORDER_LOCK_' . $user->id, 10);
+        if (!$lock->get()) {
+            abort(500, '操作过于频繁，请稍后再试');
+        }
+        try {
+            $order = Order::where('trade_no', $tradeNo)
+                ->where('user_id', $user->id)
+                ->where('status', 0)
+                ->first();
+            if (!$order) {
+                abort(500, '订单不存在或已支付');
+            }
+            // 免支付订单（金额为0）直接标记支付并异步开通
+            if ($order->total_amount <= 0) {
+                $orderService = new OrderService($order);
+                if (!$orderService->paid($order->trade_no)) {
+                    abort(500, '订单支付失败，请到网站订单页处理');
+                }
+                return ['type' => -1, 'data' => true, 'trade_no' => $tradeNo];
+            }
+            $payment = Payment::find($paymentId);
+            if (!$payment || $payment->enable !== 1) {
+                abort(500, '该支付方式不可用，请重新选择');
+            }
+            $paymentService = new PaymentService($payment->payment, $payment->id);
+            $order->handling_amount = NULL;
+            if ($payment->handling_fee_fixed || $payment->handling_fee_percent) {
+                $order->handling_amount = round(($order->total_amount * ($payment->handling_fee_percent / 100)) + $payment->handling_fee_fixed);
+            }
+            $order->payment_id = $payment->id;
+            if (!$order->save()) {
+                abort(500, '请求失败，请稍后再试');
+            }
+            $payAmount = isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount;
+            $result = $paymentService->pay([
+                'trade_no' => $tradeNo,
+                'total_amount' => $payAmount,
+                'user_id' => $order->user_id,
+                'stripe_token' => null
+            ]);
+            return [
+                'type' => $result['type'],
+                'data' => $result['data'],
+                'trade_no' => $tradeNo,
+                'payment_name' => $payment->name,
+                'pay_amount' => $payAmount
+            ];
+        } finally {
+            $lock->release();
+        }
+    }
+
     public function buildResultMessage(array $result): string
     {
         if ($result['status'] === 'opened') {
@@ -176,7 +236,10 @@ class TelegramOrderService
         }
         $amount = sprintf('%.2f', $result['total_amount'] / 100);
         $text = "订单创建成功\n———————————————\n订单号：{$result['trade_no']}\n待支付金额：{$amount} 元\n";
-        if ($this->isValidPayUrl($result['pay_url'])) {
+        if ($this->hasEnabledPayment()) {
+            $text .= "请选择支付方式，并在2小时内完成支付（超时自动取消）";
+        } elseif ($this->isValidPayUrl($result['pay_url'])) {
+            // 未配置支付方式时回退网页支付
             $text .= "请在2小时内点击下方按钮完成支付（超时自动取消）";
         } else {
             // 支付链接非合法 http(s) 绝对地址时无法用按钮，退化为文本附带链接
@@ -189,12 +252,73 @@ class TelegramOrderService
     public function buildResultMarkup(array $result)
     {
         if (($result['status'] ?? '') !== 'pending') return null;
+        // 优先在机器人内选择支付方式，直接发起支付；无可用支付方式时回退网页支付链接
+        $markup = $this->buildPaymentSelectMarkup($result['trade_no']);
+        if ($markup) return $markup;
         if (!$this->isValidPayUrl($result['pay_url'])) return null;
         return [
             'inline_keyboard' => [
                 [['text' => '去支付', 'url' => $result['pay_url']]]
             ]
         ];
+    }
+
+    // 待支付订单的支付方式选择键盘；无可用支付方式时返回 null
+    public function buildPaymentSelectMarkup(string $tradeNo)
+    {
+        $payments = Payment::where('enable', 1)
+            ->orderBy('sort', 'ASC')
+            ->get();
+        if ($payments->isEmpty()) return null;
+        $keyboard = [];
+        $row = [];
+        foreach ($payments as $payment) {
+            $row[] = [
+                'text' => $payment->name,
+                'callback_data' => "pay:{$tradeNo}:{$payment->id}"
+            ];
+            if (count($row) === 2) {
+                $keyboard[] = $row;
+                $row = [];
+            }
+        }
+        if ($row) $keyboard[] = $row;
+        return ['inline_keyboard' => $keyboard];
+    }
+
+    public function buildCheckoutMessage(array $checkout): string
+    {
+        if ($checkout['type'] === -1) {
+            return "订单已支付完成，订阅正在开通中\n订单号：{$checkout['trade_no']}\n开通完成后会在此通知您。";
+        }
+        $amount = sprintf('%.2f', $checkout['pay_amount'] / 100);
+        $text = "订单号：{$checkout['trade_no']}\n支付方式：{$checkout['payment_name']}\n应付金额：{$amount} 元\n———————————————\n";
+        if ($this->isValidPayUrl($checkout['data'])) {
+            $text .= "请点击下方“去支付”按钮完成支付";
+        } elseif (is_string($checkout['data']) && $checkout['data'] !== '') {
+            // 非 http(s) 链接（如 weixin:// 收款码内容）无法做成按钮，退化为文本供复制打开
+            $text .= "请复制以下链接，使用对应支付App打开完成支付：\n{$checkout['data']}";
+        } else {
+            $text .= "支付请求已提交，请留意开通通知";
+        }
+        $text .= "\n支付完成后会在此通知您开通结果。";
+        return $text;
+    }
+
+    public function buildCheckoutMarkup(array $checkout)
+    {
+        if ($checkout['type'] === -1) return null;
+        $rows = [];
+        if ($this->isValidPayUrl($checkout['data'])) {
+            $rows[] = [['text' => '去支付', 'url' => $checkout['data']]];
+        }
+        $rows[] = [['text' => '« 重新选择支付方式', 'callback_data' => 'pay:' . $checkout['trade_no']]];
+        return ['inline_keyboard' => $rows];
+    }
+
+    private function hasEnabledPayment(): bool
+    {
+        return Payment::where('enable', 1)->exists();
     }
 
     // 生成 TG 机器人下单的网页支付链接：优先使用后台单独配置的支付域名，未配置时回退到站点网址
