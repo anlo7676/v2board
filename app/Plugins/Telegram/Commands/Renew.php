@@ -11,6 +11,7 @@ class Renew extends Telegram {
     public $command = '/renew';
     public $description = '续费当前订阅';
     public $sort = 7;
+    public $menuScope = 'member';
     public $callback = 'renew';
 
     public function handle($message, $match = []) {

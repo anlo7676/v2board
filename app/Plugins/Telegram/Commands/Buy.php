@@ -12,6 +12,7 @@ class Buy extends Telegram {
     public $command = '/buy';
     public $description = '购买订阅';
     public $sort = 6;
+    public $menuScope = 'member';
     public $callback = 'buy';
 
     public function handle($message, $match = []) {

@@ -25,16 +25,16 @@ class Start extends Telegram {
         $lines = [];
         $lines[] = sprintf("欢迎使用 %s 机器人", config('v2board.app_name', 'V2Board'));
         $lines[] = "———————————————";
-        $lines[] = "请点击下方按钮操作，或使用以下命令：";
         if (!$user) {
+            $lines[] = "请先注册或登录绑定账号后使用下单/订阅等功能：";
             $lines[] = "/register 注册账号";
             $lines[] = "/login 登录并绑定账号";
-        }
-        $lines[] = "/buy 购买订阅";
-        $lines[] = "/renew 续费当前订阅";
-        $lines[] = "/reset 购买流量重置包";
-        $lines[] = "/traffic 查询流量";
-        if ($user) {
+        } else {
+            $lines[] = "请点击下方按钮操作，或使用以下命令：";
+            $lines[] = "/buy 购买订阅";
+            $lines[] = "/renew 续费当前订阅";
+            $lines[] = "/reset 购买流量重置包";
+            $lines[] = "/traffic 查询流量";
             $lines[] = "/subscribe 获取/重置订阅链接";
             $lines[] = "/unbind 解绑账号";
         }
@@ -47,13 +47,12 @@ class Start extends Telegram {
                 ['text' => '注册账号', 'callback_data' => 'register:start'],
                 ['text' => '登录', 'callback_data' => 'login:start']
             ];
-        }
-        $rows[] = [
-            ['text' => '购买订阅', 'callback_data' => 'buy'],
-            ['text' => '续费', 'callback_data' => 'renew'],
-            ['text' => '重置流量', 'callback_data' => 'reset']
-        ];
-        if ($user) {
+        } else {
+            $rows[] = [
+                ['text' => '购买订阅', 'callback_data' => 'buy'],
+                ['text' => '续费', 'callback_data' => 'renew'],
+                ['text' => '重置流量', 'callback_data' => 'reset']
+            ];
             $rows[] = [
                 ['text' => '订阅链接', 'callback_data' => 'subscribe']
             ];

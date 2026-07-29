@@ -13,6 +13,7 @@ class Reset extends Telegram {
     public $command = '/reset';
     public $description = '购买流量重置包';
     public $sort = 8;
+    public $menuScope = 'member';
     public $callback = 'reset';
 
     public function handle($message, $match = []) {
