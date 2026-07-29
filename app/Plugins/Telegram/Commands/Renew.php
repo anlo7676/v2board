@@ -10,6 +10,7 @@ use App\Services\TelegramOrderService;
 class Renew extends Telegram {
     public $command = '/renew';
     public $description = '续费当前订阅';
+    public $sort = 7;
     public $callback = 'renew';
 
     public function handle($message, $match = []) {

@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\Cache;
 class Login extends Telegram {
     public $command = '/login';
     public $description = '登录并获取免密登录链接';
+    public $sort = 3;
+    public $menuScope = 'guest';
     public $callback = 'login';
     public $flow = 'login';
 
@@ -127,7 +129,7 @@ class Login extends Telegram {
 
     private function sendLoginUrl(User $user, $chatId, string $prefix)
     {
-        $loginUrl = AuthService::generateTempLoginUrl($user->id);
+        $loginUrl = AuthService::generateTempLoginUrl($user->id, 'dashboard', $this->botLinkBaseUrl());
         $text = "{$prefix}\n———————————————\n一次性免密登录链接（60秒内有效）：\n{$loginUrl}";
         $this->telegramService->sendMessage($chatId, $text);
     }

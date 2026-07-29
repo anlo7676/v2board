@@ -16,6 +16,8 @@ use Illuminate\Support\Facades\Cache;
 class Register extends Telegram {
     public $command = '/register';
     public $description = '注册新账号';
+    public $sort = 2;
+    public $menuScope = 'guest';
     public $callback = 'register';
     public $flow = 'register';
 
@@ -211,7 +213,7 @@ class Register extends Telegram {
         $this->bindTelegram($user, $message->chat_id);
         $sessionService->forget($message->chat_id);
 
-        $loginUrl = AuthService::generateTempLoginUrl($user->id);
+        $loginUrl = AuthService::generateTempLoginUrl($user->id, 'dashboard', $this->botLinkBaseUrl());
         $text = "注册成功，已自动绑定当前Telegram账号\n———————————————\n邮箱：{$email}\n一次性免密登录链接（60秒内有效）：\n{$loginUrl}\n\n可使用 /buy 购买订阅，/login 随时获取新的登录链接";
         $this->telegramService->sendMessage($message->chat_id, $text);
     }

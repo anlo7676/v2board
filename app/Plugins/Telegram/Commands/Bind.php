@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Cache;
 class Bind extends Telegram {
     public $command = '/bind';
     public $description = '将Telegram账号绑定到网站';
+    public $sort = 4;
+    public $menuScope = 'none';
 
     public function handle($message, $match = []) {
         if (!$message->is_private) return;

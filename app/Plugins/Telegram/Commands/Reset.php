@@ -12,6 +12,7 @@ use App\Utils\Helper;
 class Reset extends Telegram {
     public $command = '/reset';
     public $description = '购买流量重置包';
+    public $sort = 8;
     public $callback = 'reset';
 
     public function handle($message, $match = []) {

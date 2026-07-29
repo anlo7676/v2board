@@ -9,6 +9,7 @@ use App\Utils\Helper;
 class Traffic extends Telegram {
     public $command = '/traffic';
     public $description = '查询流量信息';
+    public $sort = 9;
 
     public function handle($message, $match = []) {
         $telegramService = $this->telegramService;

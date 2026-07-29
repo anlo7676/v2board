@@ -8,6 +8,7 @@ use App\Plugins\Telegram\Telegram;
 class GetLatestUrl extends Telegram {
     public $command = '/getlatesturl';
     public $description = '获取最新的站点地址';
+    public $sort = 10;
 
     public function handle($message, $match = []) {
         $telegramService = $this->telegramService;

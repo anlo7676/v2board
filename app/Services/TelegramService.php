@@ -109,7 +109,7 @@ class TelegramService {
         ]);
     }
 
-    public function discoverCommands(string $directory): array
+    public function discoverCommands(string $directory, string $audience = 'guest'): array
     {
         $commands = [];
 
@@ -142,23 +142,87 @@ class TelegramService {
                         ? $descProp->getValue()
                         : $ref->newInstanceWithoutConstructor()->description;
 
+                    // 菜单可见范围：all(默认均可见) / guest(仅未绑定) / member(仅已绑定) / none(从不入菜单)
+                    $menuScope = 'all';
+                    if ($ref->hasProperty('menuScope')) {
+                        $scopeProp = $ref->getProperty('menuScope');
+                        $menuScope = $scopeProp->isStatic()
+                            ? $scopeProp->getValue()
+                            : $ref->newInstanceWithoutConstructor()->menuScope;
+                    }
+                    if ($menuScope === 'none') continue;
+                    if ($menuScope !== 'all' && $menuScope !== $audience) continue;
+
+                    $sort = 999;
+                    if ($ref->hasProperty('sort')) {
+                        $sortProp = $ref->getProperty('sort');
+                        $sort = $sortProp->isStatic()
+                            ? $sortProp->getValue()
+                            : $ref->newInstanceWithoutConstructor()->sort;
+                    }
+
                     $commands[] = [
                         'command' => $command,
                         'description' => $description,
+                        'sort' => $sort,
                     ];
                 }
             } catch (\ReflectionException $e) {
                 continue;
             }
         }
-        return $commands;
+        // 按 sort 升序排列菜单，未声明 sort 的命令排在最后
+        usort($commands, function ($a, $b) {
+            return $a['sort'] <=> $b['sort'];
+        });
+        // Telegram setMyCommands 仅接受 command/description，剔除仅用于排序的 sort 字段
+        return array_map(function ($item) {
+            return [
+                'command' => $item['command'],
+                'description' => $item['description'],
+            ];
+        }, $commands);
     }
-    
-    public function setMyCommands(array $commands)
+
+    public function setMyCommands(array $commands, array $scope = null)
     {
-        $this->request('setMyCommands', [
+        $params = [
             'commands' => json_encode($commands),
-        ]);
+        ];
+        if ($scope) {
+            $params['scope'] = json_encode($scope);
+        }
+        $this->request('setMyCommands', $params);
+    }
+
+    public function deleteMyCommands(array $scope = null)
+    {
+        $params = [];
+        if ($scope) {
+            $params['scope'] = json_encode($scope);
+        }
+        $this->request('deleteMyCommands', $params);
+    }
+
+    // 为指定会话设置专属命令菜单（已绑定用户隐藏注册/登录），菜单接口异常不影响主流程
+    public function applyChatCommands(int $chatId, string $audience)
+    {
+        try {
+            $commands = $this->discoverCommands(base_path('app/Plugins/Telegram/Commands'), $audience);
+            $this->setMyCommands($commands, ['type' => 'chat', 'chat_id' => $chatId]);
+        } catch (\Exception $e) {
+            // 菜单同步失败不阻断绑定/解绑等主流程
+        }
+    }
+
+    // 清除会话专属菜单，回退到全局默认菜单（重新显示注册/登录）
+    public function resetChatCommands(int $chatId)
+    {
+        try {
+            $this->deleteMyCommands(['type' => 'chat', 'chat_id' => $chatId]);
+        } catch (\Exception $e) {
+            // 忽略失败
+        }
     }
 
     private function request(string $method, array $params = [], bool $post = false)
