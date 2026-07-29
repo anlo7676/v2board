@@ -15,6 +15,12 @@ class Start extends Telegram {
         $telegramService = $this->telegramService;
         $user = User::where('telegram_id', $message->chat_id)->first();
 
+        // 已绑定但被停用的账户：提示后直接返回，不展示购买/续费等菜单
+        if ($user && $user->banned) {
+            $telegramService->sendMessage($message->chat_id, '您的账户已被停止使用，如有疑问请联系管理员');
+            return;
+        }
+
         // 同步该会话命令菜单，确保与绑定状态一致（已绑定隐藏注册/登录）
         if ($user) {
             $telegramService->applyChatCommands($message->chat_id, 'member');
@@ -34,8 +40,9 @@ class Start extends Telegram {
             $lines[] = "/buy 购买订阅";
             $lines[] = "/renew 续费当前订阅";
             $lines[] = "/reset 购买流量重置包";
-            $lines[] = "/traffic 查询流量";
+            $lines[] = "/traffic 查询套餐信息";
             $lines[] = "/subscribe 获取/重置订阅链接";
+            $lines[] = "/orders 查询我的订单";
             $lines[] = "/unbind 解绑账号";
         }
         $lines[] = "/cancel 取消当前操作";
@@ -54,7 +61,8 @@ class Start extends Telegram {
                 ['text' => '重置流量', 'callback_data' => 'reset']
             ];
             $rows[] = [
-                ['text' => '订阅链接', 'callback_data' => 'subscribe']
+                ['text' => '订阅链接', 'callback_data' => 'subscribe'],
+                ['text' => '我的订单', 'callback_data' => 'orders']
             ];
         }
 

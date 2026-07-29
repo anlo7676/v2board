@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Order;
+use App\Models\Plan;
 use App\Models\User;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\Cache;
@@ -32,6 +33,14 @@ class TelegramOrderService
         'reset_price' => '流量重置包'
     ];
 
+    CONST ORDER_STATUS_NAMES = [
+        0 => '待支付',
+        1 => '开通中',
+        2 => '已取消',
+        3 => '已开通',
+        4 => '已抵扣'
+    ];
+
     /**
      * 创建订单并结算（镜像 User\OrderController::save + checkout 的核心逻辑）
      * 余额足额自动开通，否则返回网页支付链接
@@ -55,6 +64,9 @@ class TelegramOrderService
 
     private function process(User $user, int $planId, string $period): array
     {
+        if ($user->banned) {
+            abort(500, '您的账户已被停止使用，无法下单');
+        }
         $userService = new UserService();
         if ($userService->isNotCompleteOrderByUserId($user->id)) {
             abort(500, '您有未付款或开通中的订单，请先支付或取消后再试');
@@ -149,21 +161,18 @@ class TelegramOrderService
             ];
         }
 
-        // TG 机器人下单优先使用后台单独配置的支付域名，未配置时回退到站点网址
-        $payRedirect = '/#/order/' . $order->trade_no;
-        $payDomain = config('v2board.telegram_payment_domain') ?: config('v2board.app_url');
         return [
             'status' => 'pending',
             'trade_no' => $order->trade_no,
             'total_amount' => $order->total_amount,
-            'pay_url' => $payDomain ? rtrim($payDomain, '/') . $payRedirect : url($payRedirect)
+            'pay_url' => self::buildPayUrl($order->trade_no)
         ];
     }
 
     public function buildResultMessage(array $result): string
     {
         if ($result['status'] === 'opened') {
-            return "下单成功，已使用余额支付，订阅正在开通中\n订单号：{$result['trade_no']}";
+            return "下单成功，已使用余额支付，订阅正在开通中\n订单号：{$result['trade_no']}\n开通完成后会在此通知您。";
         }
         $amount = sprintf('%.2f', $result['total_amount'] / 100);
         $text = "订单创建成功\n———————————————\n订单号：{$result['trade_no']}\n待支付金额：{$amount} 元\n";
@@ -173,6 +182,7 @@ class TelegramOrderService
             // 支付链接非合法 http(s) 绝对地址时无法用按钮，退化为文本附带链接
             $text .= "请在2小时内打开以下链接完成支付（超时自动取消）：\n{$result['pay_url']}";
         }
+        $text .= "\n支付完成后会在此通知您开通结果。";
         return $text;
     }
 
@@ -185,6 +195,47 @@ class TelegramOrderService
                 [['text' => '去支付', 'url' => $result['pay_url']]]
             ]
         ];
+    }
+
+    // 生成 TG 机器人下单的网页支付链接：优先使用后台单独配置的支付域名，未配置时回退到站点网址
+    public static function buildPayUrl(string $tradeNo): string
+    {
+        $payRedirect = '/#/order/' . $tradeNo;
+        $payDomain = config('v2board.telegram_payment_domain') ?: config('v2board.app_url');
+        return $payDomain ? rtrim($payDomain, '/') . $payRedirect : url($payRedirect);
+    }
+
+    // 订阅开通成功通知（余额支付/网页支付完成后由 OrderHandleJob 触发）
+    public static function buildOpenedNotification(Order $order, User $user = null): string
+    {
+        if (!$user) $user = User::find($order->user_id);
+        $plan = Plan::find($order->plan_id);
+        $planName = $plan ? $plan->name : '订阅';
+
+        if ($order->period === 'reset_price') {
+            return "✅ 流量重置包开通成功\n———————————————\n订单号：{$order->trade_no}\n套餐：{$planName}\n您的流量已重置，可发送 /traffic 查看。";
+        }
+
+        $lines = [];
+        $lines[] = "✅ 订阅开通成功";
+        $lines[] = "———————————————";
+        $lines[] = "订单号：{$order->trade_no}";
+        $periodName = self::PERIOD_NAMES[$order->period] ?? '';
+        $lines[] = "套餐：{$planName}" . ($periodName ? "（{$periodName}）" : '');
+        if ($user) {
+            $lines[] = $user->expired_at
+                ? ('到期时间：' . date('Y-m-d H:i', $user->expired_at))
+                : '到期时间：长期有效';
+        }
+        $lines[] = "";
+        $lines[] = "可发送 /subscribe 获取订阅链接，/traffic 查看流量。";
+        return implode("\n", $lines);
+    }
+
+    // 订单超时取消通知（2 小时未支付，由 OrderHandleJob 触发）
+    public static function buildCanceledNotification(Order $order): string
+    {
+        return "⏰ 订单已超时取消\n———————————————\n订单号：{$order->trade_no}\n该订单超过2小时未完成支付，已自动取消。如需购买请发送 /buy。";
     }
 
     private function isValidPayUrl($url): bool

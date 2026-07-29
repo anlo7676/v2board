@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V1\Guest;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Services\TelegramService;
 use App\Services\TelegramSessionService;
 use Illuminate\Http\Request;
@@ -37,6 +38,12 @@ class TelegramController extends Controller
         // 机器人总开关关闭时不处理任何命令/会话/回调
         if (!(int)config('v2board.telegram_bot_enable', 0)) return;
         $msg = $this->msg;
+
+        // 惰性同步已绑定用户的会话菜单：命令集/菜单版本变化后（含本次升级前已绑定的历史用户），
+        // 用户下次私聊交互即自动补齐 member 菜单，无需等待重新绑定或 /start
+        if (isset($msg->is_private) && $msg->is_private && isset($msg->chat_id)) {
+            $this->syncChatMenu($msg->chat_id);
+        }
 
         if (isset($msg->command)) {
             $commandName = explode('@', $msg->command);
@@ -135,6 +142,36 @@ class TelegramController extends Controller
             if (isset($instance->command) && $instance->command === $command) return true;
         }
         return false;
+    }
+
+    // 惰性下发会话专属菜单：仅当本会话菜单受众/版本落后时才调用 TG 接口，避免每条消息都请求
+    private function syncChatMenu($chatId)
+    {
+        try {
+            $key = 'TG_CHAT_MENU_' . $chatId;
+            $synced = Cache::get($key);
+            $bound = User::where('telegram_id', $chatId)->exists();
+            // 缓存值编码“受众@版本”，绑定状态或菜单版本变化都会触发重同步
+            $mark = ($bound ? 'member' : 'guest') . '@' . TelegramService::MENU_VERSION;
+            if ($synced === $mark) return;
+
+            if ($bound) {
+                // 已绑定：下发 member 会话菜单，仅成功后记录，失败留待下次交互重试
+                if ($this->telegramService->applyChatCommands($chatId, 'member')) {
+                    Cache::put($key, $mark, 30 * 24 * 3600);
+                }
+            } elseif ($synced === null) {
+                // 从未同步过的陌生会话：全局默认菜单已是 guest，无需调用 TG 接口
+                Cache::put($key, $mark, 30 * 24 * 3600);
+            } else {
+                // 曾下发过会话菜单、现已解绑：清除会话菜单回退全局默认，仅成功后记录
+                if ($this->telegramService->resetChatCommands($chatId)) {
+                    Cache::put($key, $mark, 30 * 24 * 3600);
+                }
+            }
+        } catch (\Exception $e) {
+            // 菜单同步失败不影响命令处理
+        }
     }
 
     public function getBotName()

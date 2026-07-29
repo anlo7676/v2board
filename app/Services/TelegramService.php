@@ -7,6 +7,8 @@ use \Curl\Curl;
 use Illuminate\Mail\Markdown;
 
 class TelegramService {
+    // 命令菜单版本：命令增删/排序/可见范围等菜单结构变更时递增，已绑定用户下次私聊交互会自动重新下发会话菜单
+    const MENU_VERSION = '4';
     protected $api;
 
     public function __construct($token = '')
@@ -131,61 +133,37 @@ class TelegramService {
 
             try {
                 $ref = new \ReflectionClass($className);
+                // 一次性读取默认属性值，兼容 PHP7.3，避免多次实例化与“声明未赋值”导致的 null 陷阱
+                $defaults = $ref->getDefaultProperties();
 
-                if (
-                    $ref->hasProperty('command') &&
-                    $ref->hasProperty('description')
-                ) {
-                    $commandProp = $ref->getProperty('command');
-                    $descProp = $ref->getProperty('description');
-
-                    $command = $commandProp->isStatic()
-                        ? $commandProp->getValue()
-                        : $ref->newInstanceWithoutConstructor()->command;
-
-                    $description = $descProp->isStatic()
-                        ? $descProp->getValue()
-                        : $ref->newInstanceWithoutConstructor()->description;
-
-                    // 菜单可见范围：all(默认均可见) / guest(仅未绑定) / member(仅已绑定) / none(从不入菜单)
-                    $menuScope = 'all';
-                    if ($ref->hasProperty('menuScope')) {
-                        $scopeProp = $ref->getProperty('menuScope');
-                        $menuScope = $scopeProp->isStatic()
-                            ? $scopeProp->getValue()
-                            : $ref->newInstanceWithoutConstructor()->menuScope;
-                    }
-                    // 是否在群组菜单显示（默认否，即仅私聊可用）
-                    $groupVisible = false;
-                    if ($ref->hasProperty('groupVisible')) {
-                        $groupProp = $ref->getProperty('groupVisible');
-                        $groupVisible = $groupProp->isStatic()
-                            ? $groupProp->getValue()
-                            : $ref->newInstanceWithoutConstructor()->groupVisible;
-                    }
-                    if ($chatType === 'group') {
-                        // 群组菜单：仅保留群内可用命令
-                        if (!$groupVisible) continue;
-                    } else {
-                        // 私聊菜单：按绑定状态分层
-                        if ($menuScope === 'none') continue;
-                        if ($menuScope !== 'all' && $menuScope !== $audience) continue;
-                    }
-
-                    $sort = 999;
-                    if ($ref->hasProperty('sort')) {
-                        $sortProp = $ref->getProperty('sort');
-                        $sort = $sortProp->isStatic()
-                            ? $sortProp->getValue()
-                            : $ref->newInstanceWithoutConstructor()->sort;
-                    }
-
-                    $commands[] = [
-                        'command' => $command,
-                        'description' => $description,
-                        'sort' => $sort,
-                    ];
+                if (!isset($defaults['command']) || !isset($defaults['description'])) {
+                    continue;
                 }
+
+                $command = $defaults['command'];
+                $description = $defaults['description'];
+                // 菜单可见范围：all(默认均可见) / guest(仅未绑定) / member(仅已绑定) / none(从不入菜单)
+                $menuScope = isset($defaults['menuScope']) ? $defaults['menuScope'] : 'all';
+                // 是否在群组菜单显示（默认否，即仅私聊可用）
+                $groupVisible = !empty($defaults['groupVisible']);
+
+                if ($chatType === 'group') {
+                    // 群组菜单：仅保留群内可用命令
+                    if (!$groupVisible) continue;
+                } else {
+                    // 私聊菜单：按绑定状态分层
+                    if ($menuScope === 'none') continue;
+                    if ($menuScope !== 'all' && $menuScope !== $audience) continue;
+                }
+
+                // 未声明或非数值 sort 的命令排在最后
+                $sort = (isset($defaults['sort']) && is_numeric($defaults['sort'])) ? (int)$defaults['sort'] : 999;
+
+                $commands[] = [
+                    'command' => $command,
+                    'description' => $description,
+                    'sort' => $sort,
+                ];
             } catch (\ReflectionException $e) {
                 continue;
             }
@@ -211,7 +189,7 @@ class TelegramService {
         if ($scope) {
             $params['scope'] = json_encode($scope);
         }
-        $this->request('setMyCommands', $params);
+        $this->request('setMyCommands', $params, false, 5);
     }
 
     public function deleteMyCommands(array $scope = null)
@@ -220,33 +198,42 @@ class TelegramService {
         if ($scope) {
             $params['scope'] = json_encode($scope);
         }
-        $this->request('deleteMyCommands', $params);
+        $this->request('deleteMyCommands', $params, false, 5);
     }
 
     // 为指定会话设置专属命令菜单（已绑定用户隐藏注册/登录），菜单接口异常不影响主流程
-    public function applyChatCommands(int $chatId, string $audience)
+    public function applyChatCommands(int $chatId, string $audience): bool
     {
         try {
             $commands = $this->discoverCommands(base_path('app/Plugins/Telegram/Commands'), $audience);
             $this->setMyCommands($commands, ['type' => 'chat', 'chat_id' => $chatId]);
+            return true;
         } catch (\Exception $e) {
             // 菜单同步失败不阻断绑定/解绑等主流程
+            return false;
         }
     }
 
     // 清除会话专属菜单，回退到全局默认菜单（重新显示注册/登录）
-    public function resetChatCommands(int $chatId)
+    public function resetChatCommands(int $chatId): bool
     {
         try {
             $this->deleteMyCommands(['type' => 'chat', 'chat_id' => $chatId]);
+            return true;
         } catch (\Exception $e) {
             // 忽略失败
+            return false;
         }
     }
 
-    private function request(string $method, array $params = [], bool $post = false)
+    private function request(string $method, array $params = [], bool $post = false, int $timeout = 0)
     {
         $curl = new Curl();
+        if ($timeout > 0) {
+            // 为非关键的菜单类接口设置超时，避免 TG API 缓慢时拖长 webhook 响应导致重投
+            $curl->setOpt(CURLOPT_CONNECTTIMEOUT, $timeout);
+            $curl->setOpt(CURLOPT_TIMEOUT, $timeout);
+        }
         if ($post) {
             $curl->post($this->api . $method, $params);
         } else {

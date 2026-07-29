@@ -8,7 +8,7 @@ use App\Plugins\Telegram\Telegram;
 class UnBind extends Telegram {
     public $command = '/unbind';
     public $description = '将Telegram账号从网站解绑';
-    public $sort = 11;
+    public $sort = 12;
     public $menuScope = 'member';
 
     public function handle($message, $match = []) {

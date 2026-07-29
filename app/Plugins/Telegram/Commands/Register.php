@@ -65,7 +65,7 @@ class Register extends Telegram {
         }
         $user = User::where('telegram_id', $message->chat_id)->first();
         if ($user) {
-            abort(500, '当前Telegram已绑定账号，可直接使用 /login 获取登录链接');
+            abort(500, '当前Telegram已绑定账号，无需重复注册');
         }
         $sessionService->set($message->chat_id, [
             'flow' => 'register',
@@ -179,7 +179,7 @@ class Register extends Telegram {
         }
         if (User::where('telegram_id', $message->chat_id)->exists()) {
             $sessionService->forget($message->chat_id);
-            abort(500, '当前Telegram已绑定账号，可直接使用 /login 获取登录链接');
+            abort(500, '当前Telegram已绑定账号，无需重复注册');
         }
 
         $user = new User();
