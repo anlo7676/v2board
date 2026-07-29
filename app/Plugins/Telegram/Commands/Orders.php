@@ -81,7 +81,11 @@ class Orders extends Telegram {
         }
 
         // 纯文本发送：订单号/链接可能含下划线，markdown 转义会破坏内容
-        $this->telegramService->sendMessage($message->chat_id, implode("\n", $lines), '', $markup);
+        $response = $this->telegramService->sendMessage($message->chat_id, implode("\n", $lines), '', $markup);
+        // 记录带支付/取消按钮的消息，供订单终态时移除按钮
+        if ($markup && $pendingTradeNo && isset($response->result->message_id)) {
+            TelegramOrderService::rememberPayMessage($pendingTradeNo, $message->chat_id, $response->result->message_id);
+        }
     }
 
     // 取消前二次确认，避免误触；编辑原消息展示确认按钮

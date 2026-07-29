@@ -39,7 +39,7 @@ class Reset extends Telegram {
         if ($message->message_type === 'callback_query' && $message->callback_data === 'reset:confirm') {
             $orderService = new TelegramOrderService();
             $result = $orderService->createAndCheckout($user, $plan->id, 'reset_price');
-            $this->telegramService->sendMessage($message->chat_id, $orderService->buildResultMessage($result), '', $orderService->buildResultMarkup($result));
+            $orderService->sendResult($this->telegramService, $message->chat_id, $result);
             return;
         }
 

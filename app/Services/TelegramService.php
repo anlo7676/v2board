@@ -29,7 +29,7 @@ class TelegramService {
         if ($replyMarkup) {
             $params['reply_markup'] = json_encode($replyMarkup);
         }
-        $this->request('sendMessage', $params, (bool)$replyMarkup);
+        return $this->request('sendMessage', $params, (bool)$replyMarkup);
     }
 
     public function editMessageText(int $chatId, int $messageId, string $text, $replyMarkup = null, string $parseMode = '')
@@ -66,6 +66,27 @@ class TelegramService {
             ]);
         } catch (\Exception $e) {
             // 应答失败（如回调已过期）不影响主流程
+        }
+    }
+
+    // 移除/替换消息的内联键盘；replyMarkup 为空时移除键盘，保留原消息文本
+    public function editMessageReplyMarkup(int $chatId, int $messageId, $replyMarkup = null)
+    {
+        $params = [
+            'chat_id' => $chatId,
+            'message_id' => $messageId
+        ];
+        if ($replyMarkup) {
+            $params['reply_markup'] = json_encode($replyMarkup);
+        }
+        try {
+            // 设置短超时：该接口可能在队列任务内调用，避免 TG API 缓慢拖超任务超时
+            $this->request('editMessageReplyMarkup', $params, false, 3);
+        } catch (\Exception $e) {
+            // 消息本就无键盘时 TG 会报 message is not modified，可安全忽略
+            if (strpos($e->getMessage(), 'not modified') === false) {
+                throw $e;
+            }
         }
     }
 

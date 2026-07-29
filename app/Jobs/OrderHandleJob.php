@@ -20,7 +20,8 @@ class OrderHandleJob implements ShouldQueue
     protected $tradeNo;
 
     public $tries = 3;
-    public $timeout = 5;
+    // 需覆盖终态清理旧消息支付按钮的 TG 接口调用耗时（最多3次，单次超时3秒）
+    public $timeout = 15;
     /**
      * Create a new job instance.
      *
@@ -67,6 +68,12 @@ class OrderHandleJob implements ShouldQueue
         if (!(int)config('v2board.telegram_bot_enable', 0)) return;
         $user = User::find($order->user_id);
         if (!$user || !$user->telegram_id) return;
+        // 订单已到终态，移除历史消息上残留的支付/取消按钮，避免误点
+        try {
+            TelegramOrderService::clearPayMessages($order->trade_no);
+        } catch (\Exception $e) {
+            // 清理失败不影响通知主流程
+        }
         // 通知去重：并发/重试下同一订单同一事件只推送一次
         if (!Cache::add('TG_ORDER_NOTIFY_' . $order->trade_no . '_' . $event, 1, 86400)) return;
         $text = $event === 'opened'

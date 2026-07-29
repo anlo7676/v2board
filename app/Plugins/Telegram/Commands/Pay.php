@@ -48,6 +48,8 @@ class Pay extends Telegram {
             $statusName = TelegramOrderService::ORDER_STATUS_NAMES[$order->status] ?? '未知';
             $this->telegramService->editMessageText($message->chat_id, $message->message_id,
                 "订单号：{$tradeNo}\n当前状态：{$statusName}\n该订单已无需支付。");
+            // 顺带移除其它历史消息上该订单残留的按钮
+            TelegramOrderService::clearPayMessages($tradeNo);
             return;
         }
         $orderService = new TelegramOrderService();
@@ -62,17 +64,22 @@ class Pay extends Telegram {
         }
         $text = "订单号：{$tradeNo}\n待支付金额：{$amount} 元\n———————————————\n请选择支付方式：";
         $this->telegramService->editMessageText($message->chat_id, $message->message_id, $text, $markup);
+        TelegramOrderService::rememberPayMessage($tradeNo, $message->chat_id, $message->message_id);
     }
 
     private function checkout($message, User $user, string $tradeNo, int $paymentId)
     {
         $orderService = new TelegramOrderService();
         $result = $orderService->checkout($user, $tradeNo, $paymentId);
+        $markup = $orderService->buildCheckoutMarkup($result);
         $this->telegramService->editMessageText(
             $message->chat_id,
             $message->message_id,
             $orderService->buildCheckoutMessage($result),
-            $orderService->buildCheckoutMarkup($result)
+            $markup
         );
+        if ($markup) {
+            TelegramOrderService::rememberPayMessage($tradeNo, $message->chat_id, $message->message_id);
+        }
     }
 }

@@ -37,7 +37,7 @@ class Renew extends Telegram {
             $period = explode(':', $message->callback_data)[2] ?? '';
             $orderService = new TelegramOrderService();
             $result = $orderService->createAndCheckout($user, $plan->id, $period);
-            $this->telegramService->sendMessage($message->chat_id, $orderService->buildResultMessage($result), '', $orderService->buildResultMarkup($result));
+            $orderService->sendResult($this->telegramService, $message->chat_id, $result);
             return;
         }
 

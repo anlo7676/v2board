@@ -258,9 +258,50 @@ class TelegramOrderService
             if (!$orderService->cancel()) {
                 abort(500, '取消失败，请稍后再试');
             }
+            // 移除历史消息上残留的支付/取消按钮
+            self::clearPayMessages($tradeNo);
             return $order;
         } finally {
             $lock->release();
+        }
+    }
+
+    // 发送下单结果并记录带支付按钮的消息位置，供订单终态时移除按钮
+    public function sendResult(TelegramService $telegramService, int $chatId, array $result): void
+    {
+        $markup = $this->buildResultMarkup($result);
+        $response = $telegramService->sendMessage($chatId, $this->buildResultMessage($result), '', $markup);
+        if ($markup && isset($response->result->message_id)) {
+            self::rememberPayMessage($result['trade_no'], $chatId, $response->result->message_id);
+        }
+    }
+
+    // 记录带支付按钮的消息位置，订单到终态（开通/取消）后据此移除旧消息上的按钮
+    public static function rememberPayMessage(string $tradeNo, int $chatId, int $messageId): void
+    {
+        $key = 'TG_PAY_MSG_' . $tradeNo;
+        $list = Cache::get($key, []);
+        $pair = [$chatId, $messageId];
+        if (in_array($pair, $list)) return;
+        $list[] = $pair;
+        // 只保留最近3条，控制终态清理时的 TG 接口调用次数
+        $list = array_slice($list, -3);
+        // TTL 需覆盖订单2小时未支付自动取消窗口
+        Cache::put($key, $list, 3 * 3600);
+    }
+
+    // 移除该订单历史消息上的支付按钮；Cache::pull 保证只清理一次，失败不影响主流程
+    public static function clearPayMessages(string $tradeNo): void
+    {
+        $list = Cache::pull('TG_PAY_MSG_' . $tradeNo);
+        if (!$list) return;
+        $telegramService = new TelegramService();
+        foreach ($list as $pair) {
+            try {
+                $telegramService->editMessageReplyMarkup((int)$pair[0], (int)$pair[1]);
+            } catch (\Exception $e) {
+                // 消息已被删除等场景忽略
+            }
         }
     }
 
