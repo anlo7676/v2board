@@ -6,7 +6,6 @@ use App\Jobs\SendEmailJob;
 use App\Models\Plan;
 use App\Models\User;
 use App\Plugins\Telegram\Telegram;
-use App\Services\AuthService;
 use App\Services\TelegramSessionService;
 use App\Utils\CacheKey;
 use App\Utils\Dict;
@@ -213,8 +212,7 @@ class Register extends Telegram {
         $this->bindTelegram($user, $message->chat_id);
         $sessionService->forget($message->chat_id);
 
-        $loginUrl = AuthService::generateTempLoginUrl($user->id, 'dashboard', $this->botLinkBaseUrl());
-        $text = "注册成功，已自动绑定当前Telegram账号\n———————————————\n邮箱：{$email}\n一次性免密登录链接（60秒内有效）：\n{$loginUrl}\n\n可使用 /buy 购买订阅，/login 随时获取新的登录链接";
+        $text = "注册成功，已自动绑定当前Telegram账号\n———————————————\n邮箱：{$email}\n\n可使用 /buy 购买订阅";
         $this->telegramService->sendMessage($message->chat_id, $text);
     }
 

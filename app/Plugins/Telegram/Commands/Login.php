@@ -4,7 +4,6 @@ namespace App\Plugins\Telegram\Commands;
 
 use App\Models\User;
 use App\Plugins\Telegram\Telegram;
-use App\Services\AuthService;
 use App\Services\TelegramSessionService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
@@ -12,7 +11,7 @@ use Illuminate\Support\Facades\Cache;
 
 class Login extends Telegram {
     public $command = '/login';
-    public $description = '登录并获取免密登录链接';
+    public $description = '登录并绑定账号';
     public $sort = 3;
     public $menuScope = 'guest';
     public $callback = 'login';
@@ -54,7 +53,7 @@ class Login extends Telegram {
             if ($user->banned) {
                 abort(500, '该账户已被停止使用');
             }
-            $this->sendLoginUrl($user, $message->chat_id, '登录链接已生成');
+            $this->telegramService->sendMessage($message->chat_id, "当前Telegram已绑定账号：{$user->email}");
             return;
         }
         $sessionService->set($message->chat_id, [
@@ -124,13 +123,6 @@ class Login extends Telegram {
 
         $this->bindTelegram($user, $message->chat_id);
         $sessionService->forget($message->chat_id);
-        $this->sendLoginUrl($user, $message->chat_id, '登录成功，已自动绑定当前Telegram账号');
-    }
-
-    private function sendLoginUrl(User $user, $chatId, string $prefix)
-    {
-        $loginUrl = AuthService::generateTempLoginUrl($user->id, 'dashboard', $this->botLinkBaseUrl());
-        $text = "{$prefix}\n———————————————\n一次性免密登录链接（60秒内有效）：\n{$loginUrl}";
-        $this->telegramService->sendMessage($chatId, $text);
+        $this->telegramService->sendMessage($message->chat_id, "登录成功，已绑定当前Telegram账号：{$email}");
     }
 }
