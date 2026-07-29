@@ -234,6 +234,36 @@ class TelegramOrderService
         }
     }
 
+    /**
+     * 取消待支付订单（镜像 User\OrderController::cancel 的核心逻辑），余额抵扣部分退回账户余额
+     */
+    public function cancelOrder(User $user, string $tradeNo): Order
+    {
+        // 用户级锁防重复点击并发取消导致余额重复退回，也避免与发起支付互相穿插
+        $lock = Cache::lock('TELEGRAM_ORDER_LOCK_' . $user->id, 10);
+        if (!$lock->get()) {
+            abort(500, '操作过于频繁，请稍后再试');
+        }
+        try {
+            $order = Order::where('trade_no', $tradeNo)
+                ->where('user_id', $user->id)
+                ->first();
+            if (!$order) {
+                abort(500, '订单不存在');
+            }
+            if ((int)$order->status !== 0) {
+                abort(500, '只能取消待支付订单');
+            }
+            $orderService = new OrderService($order);
+            if (!$orderService->cancel()) {
+                abort(500, '取消失败，请稍后再试');
+            }
+            return $order;
+        } finally {
+            $lock->release();
+        }
+    }
+
     public function buildResultMessage(array $result): string
     {
         if ($result['status'] === 'opened') {
