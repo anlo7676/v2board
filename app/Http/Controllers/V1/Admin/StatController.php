@@ -199,37 +199,27 @@ class StatController extends Controller
         $endAt = time();
         $statistics = StatUser::select([
             'user_id',
-            'server_rate',
-            'u',
-            'd',
-            DB::raw('(u+d) as total')
+            DB::raw('SUM((u+d) * server_rate) as total')
         ])
             ->where('record_at', '>=', $startAt)
             ->where('record_at', '<', $endAt)
             ->where('record_type', 'd')
-            ->limit(30)
+            ->groupBy('user_id')
             ->orderBy('total', 'DESC')
+            ->limit(15)
             ->get()
             ->toArray();
         $data = [];
-        $idIndexMap = [];
         foreach ($statistics as $k => $v) {
-            $id = $statistics[$k]['user_id'];
-            $user = User::where('id', $id)->first();
-            $statistics[$k]['email'] = empty($user) ? "null" : $user['email'];
-            $statistics[$k]['total'] = $statistics[$k]['total'] * $statistics[$k]['server_rate'] / 1073741824;
-            if (isset($idIndexMap[$id])) {
-                $index = $idIndexMap[$id];
-                $data[$index]['total'] += $statistics[$k]['total'];
-            } else {
-                unset($statistics[$k]['server_rate']);
-                $data[] = $statistics[$k];
-                $idIndexMap[$id] = count($data) - 1;
-            }
+            $user = User::where('id', $v['user_id'])->first();
+            $data[] = [
+                'user_id' => $v['user_id'],
+                'email' => empty($user) ? "null" : $user['email'],
+                'total' => round($v['total'] / 1073741824, 2)
+            ];
         }
-        array_multisort(array_column($data, 'total'), SORT_DESC, $data);
         return [
-            'data' => array_slice($data, 0, 15)
+            'data' => $data
         ];
     }
 
@@ -239,38 +229,27 @@ class StatController extends Controller
         $endAt = strtotime(date('Y-m-d'));
         $statistics = StatUser::select([
             'user_id',
-            'server_rate',
-            'u',
-            'd',
-            DB::raw('(u+d) as total')
+            DB::raw('SUM((u+d) * server_rate) as total')
         ])
             ->where('record_at', '>=', $startAt)
             ->where('record_at', '<', $endAt)
             ->where('record_type', 'd')
-            ->limit(30)
+            ->groupBy('user_id')
             ->orderBy('total', 'DESC')
+            ->limit(15)
             ->get()
             ->toArray();
         $data = [];
-        $idIndexMap = [];
         foreach ($statistics as $k => $v) {
-            $id = $statistics[$k]['user_id'];
-            $user = User::where('id', $id)->first();
-            $statistics[$k]['email'] = empty($user) ? "null" : $user['email'];
-            $statistics[$k]['total'] = $statistics[$k]['total'] * $statistics[$k]['server_rate'] / 1073741824;
-            if (isset($idIndexMap[$id])) {
-
-                $index = $idIndexMap[$id];
-                $data[$index]['total'] += $statistics[$k]['total'];
-            } else {
-                unset($statistics[$k]['server_rate']);
-                $data[] = $statistics[$k];
-                $idIndexMap[$id] = count($data) - 1;
-            }
+            $user = User::where('id', $v['user_id'])->first();
+            $data[] = [
+                'user_id' => $v['user_id'],
+                'email' => empty($user) ? "null" : $user['email'],
+                'total' => round($v['total'] / 1073741824, 2)
+            ];
         }
-        array_multisort(array_column($data, 'total'), SORT_DESC, $data);
         return [
-            'data' => array_slice($data, 0, 15)
+            'data' => $data
         ];
     }
 
