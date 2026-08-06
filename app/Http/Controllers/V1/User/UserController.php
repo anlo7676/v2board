@@ -159,12 +159,14 @@ class UserController extends Controller
         DB::beginTransaction();
 
         try {
-            $user = User::find($request->user['id']);
+            // 加锁查询用户，防止余额读改写竞态
+            $user = User::lockForUpdate()->find($request->user['id']);
             if (!$user) {
                 abort(500, __('The user does not exist'));
             }
             $giftcard_input = $request->giftcard;
-            $giftcard = Giftcard::where('code', $giftcard_input)->first();
+            // 加锁查询礼品卡，防止并发兑换绕过使用次数限制
+            $giftcard = Giftcard::where('code', $giftcard_input)->lockForUpdate()->first();
 
             if (!$giftcard) {
                 abort(500, __('The gift card does not exist'));
@@ -409,37 +411,46 @@ class UserController extends Controller
 
     public function transfer(UserTransfer $request)
     {
-        $user = User::find($request->user['id']);
-        if (!$user) {
-            abort(500, __('The user does not exist'));
-        }
-        if ($request->input('transfer_amount') > $user->commission_balance) {
-            abort(500, __('Insufficient commission balance'));
-        }
         DB::beginTransaction();
-        $order = new Order();
-        $orderService = new OrderService($order);
-        $order->user_id = $request->user['id'];
-        $order->plan_id = 0;
-        $order->period = 'deposit';
-        $order->trade_no = Helper::generateOrderNo();
-        $order->total_amount = $request->input('transfer_amount');
+        try {
+            // 加锁查询用户，防止佣金与余额的并发读改写竞态
+            $user = User::lockForUpdate()->find($request->user['id']);
+            if (!$user) {
+                abort(500, __('The user does not exist'));
+            }
+            if ($request->input('transfer_amount') > $user->commission_balance) {
+                abort(500, __('Insufficient commission balance'));
+            }
+            $order = new Order();
+            $orderService = new OrderService($order);
+            $order->user_id = $request->user['id'];
+            $order->plan_id = 0;
+            $order->period = 'deposit';
+            $order->trade_no = Helper::generateOrderNo();
+            $order->total_amount = $request->input('transfer_amount');
 
-        $orderService->setOrderType($user);
-        $orderService->setInvite($user);
+            $orderService->setOrderType($user);
+            $orderService->setInvite($user);
 
-        $user->commission_balance = $user->commission_balance - $request->input('transfer_amount');
-        $user->balance = $user->balance + $request->input('transfer_amount');
-        $order->status = 3;
-        $order->total_amount = 0;
-        $order->surplus_amount = $request->input('transfer_amount');
-        $order->callback_no = '佣金划转 Commission transfer';
-        if (!$order->save()||!$user->save()) {
-            DB::rollback();
+            $user->commission_balance = $user->commission_balance - $request->input('transfer_amount');
+            $user->balance = $user->balance + $request->input('transfer_amount');
+            $order->status = 3;
+            $order->total_amount = 0;
+            $order->surplus_amount = $request->input('transfer_amount');
+            $order->callback_no = '佣金划转 Commission transfer';
+            if (!$order->save()||!$user->save()) {
+                DB::rollback();
+                abort(500, __('Transfer failed'));
+            }
+
+            DB::commit();
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            DB::rollBack();
+            throw $e;
+        } catch (\Exception $e) {
+            DB::rollBack();
             abort(500, __('Transfer failed'));
         }
-
-        DB::commit();
 
         return response([
             'data' => true

@@ -154,8 +154,12 @@ class TelegramOrderService
             throw $e;
         }
 
+        // 拒绝负金额订单，负数不应出现于任何合法路径
+        if ($order->total_amount < 0) {
+            abort(500, '订单金额异常，请联系客服');
+        }
         // 余额全额抵扣，直接标记支付并异步开通
-        if ($order->total_amount <= 0) {
+        if ($order->total_amount === 0) {
             if (!$orderService->paid($order->trade_no)) {
                 abort(500, '订单支付失败，请到网站订单页处理');
             }
@@ -192,8 +196,12 @@ class TelegramOrderService
             if (!$order) {
                 abort(500, '订单不存在或已支付');
             }
+            // 拒绝负金额订单，负数不应出现于任何合法路径
+            if ($order->total_amount < 0) {
+                abort(500, '订单金额异常，请联系客服');
+            }
             // 免支付订单（金额为0）直接标记支付并异步开通
-            if ($order->total_amount <= 0) {
+            if ($order->total_amount === 0) {
                 $orderService = new OrderService($order);
                 if (!$orderService->paid($order->trade_no)) {
                     abort(500, '订单支付失败，请到网站订单页处理');

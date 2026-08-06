@@ -60,7 +60,7 @@ class EPay {
 
     public function notify($params)
     {
-        $sign = $params['sign'];
+        $sign = $params['sign'] ?? '';
         unset($params['sign']);
         unset($params['sign_type']);
         ksort($params);
@@ -77,9 +77,25 @@ class EPay {
             return('fail');
         }
 
+        // 校验商户号与支付配置一致，防止回调被路由到错误的支付配置
+        // HTTP 回调参数始终为字符串，配置值可能为数值类型，统一转字符串比较
+        if (!isset($params['pid']) || (string)$params['pid'] !== (string)$this->config['pid']) {
+            return false;
+        }
+
+        // 校验回调金额：必须为正数且精度到分
+        if (!isset($params['money']) || !is_numeric($params['money']) || (float)$params['money'] <= 0) {
+            return false;
+        }
+        $callbackAmount = (int)round((float)$params['money'] * 100);
+        if ($callbackAmount <= 0) {
+            return false;
+        }
+
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'amount' => $callbackAmount
         ];
     }
 }

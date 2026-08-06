@@ -28,77 +28,97 @@ class OrderService
 
     public function open()
     {
-        $order = $this->order;
-        $this->user = User::find($order->user_id);
-        if ($order->type == 9) {
-            DB::beginTransaction();
-            $this->user->balance += $order->total_amount + $this->getbounus($order->total_amount);
+        DB::beginTransaction();
+        try {
+            // 事务内重新加锁查询订单，防止并发开通导致重复入账
+            $order = Order::lockForUpdate()->find($this->order->id);
+            if (!$order || $order->status !== 1) {
+                DB::rollBack();
+                return;
+            }
+            $this->order = $order;
+            // 事务内加锁查询用户，防止余额读改写竞态
+            $this->user = User::lockForUpdate()->find($order->user_id);
+            if (!$this->user) {
+                DB::rollBack();
+                abort(500, '用户不存在');
+            }
+
+            if ($order->type == 9) {
+                $this->user->balance += $order->total_amount + $this->getbounus($order->total_amount);
+
+                if (!$this->user->save()) {
+                    DB::rollBack();
+                    abort(500, '充值失败');
+                }
+                $order->status = 3;
+                if (!$order->save()) {
+                    DB::rollBack();
+                    abort(500, '充值失败');
+                }
+                DB::commit();
+                return;
+            }
+
+            $plan = Plan::find($order->plan_id);
+            if (!$plan) {
+                DB::rollBack();
+                abort(500, '套餐不存在');
+            }
+
+            if ($order->refund_amount) {
+                $this->user->balance = $this->user->balance + $order->refund_amount;
+            }
+            if ($order->surplus_order_ids) {
+                try {
+                    Order::whereIn('id', $order->surplus_order_ids)->update([
+                        'status' => 4
+                    ]);
+                } catch (\Exception $e) {
+                    DB::rollback();
+                    abort(500, '开通失败');
+                }
+            }
+            switch ((string)$order->period) {
+                case 'onetime_price':
+                    $this->buyByOneTime($order, $plan);
+                    break;
+                case 'reset_price':
+                    $this->buyByResetTraffic();
+                    break;
+                default:
+                    $this->buyByPeriod($order, $plan);
+            }
+
+            switch ((int)$order->type) {
+                case 1:
+                    $this->openEvent(config('v2board.new_order_event_id', 0));
+                    break;
+                case 2:
+                    $this->openEvent(config('v2board.renew_order_event_id', 0));
+                    break;
+                case 3:
+                    $this->openEvent(config('v2board.change_order_event_id', 0));
+                    break;
+            }
+
+            $this->setSpeedLimit($plan->speed_limit);
 
             if (!$this->user->save()) {
                 DB::rollBack();
-                abort(500, '充值失败');
+                abort(500, '开通失败');
             }
             $order->status = 3;
             if (!$order->save()) {
                 DB::rollBack();
-                abort(500, '充值失败');
-            }
-            DB::commit();
-            return;
-        }
-
-        $plan = Plan::find($order->plan_id);
-
-        if ($order->refund_amount) {
-            $this->user->balance = $this->user->balance + $order->refund_amount;
-        }
-        DB::beginTransaction();
-        if ($order->surplus_order_ids) {
-            try {
-                Order::whereIn('id', $order->surplus_order_ids)->update([
-                    'status' => 4
-                ]);
-            } catch (\Exception $e) {
-                DB::rollback();
                 abort(500, '开通失败');
             }
-        }
-        switch ((string)$order->period) {
-            case 'onetime_price':
-                $this->buyByOneTime($order, $plan);
-                break;
-            case 'reset_price':
-                $this->buyByResetTraffic();
-                break;
-            default:
-                $this->buyByPeriod($order, $plan);
-        }
 
-        switch ((int)$order->type) {
-            case 1:
-                $this->openEvent(config('v2board.new_order_event_id', 0));
-                break;
-            case 2:
-                $this->openEvent(config('v2board.renew_order_event_id', 0));
-                break;
-            case 3:
-                $this->openEvent(config('v2board.change_order_event_id', 0));
-                break;
-        }
-
-        $this->setSpeedLimit($plan->speed_limit);
-
-        if (!$this->user->save()) {
+            DB::commit();
+        } catch (\Exception $e) {
             DB::rollBack();
-            abort(500, '开通失败');
+            throw $e;
         }
-        $order->status = 3;
-        if (!$order->save()) {
-            DB::rollBack();
-            abort(500, '开通失败');
-        }
-
-        DB::commit();
     }
 
 
@@ -256,12 +276,28 @@ class OrderService
 
     public function paid(string $callbackNo)
     {
-        $order = $this->order;
-        if ($order->status !== 0) return true;
-        $order->status = 1;
-        $order->paid_at = time();
-        $order->callback_no = $callbackNo;
-        if (!$order->save()) return false;
+        DB::beginTransaction();
+        try {
+            // 事务内重新加锁查询订单，防止并发回调/重复回调导致重复入账
+            $order = Order::lockForUpdate()->find($this->order->id);
+            if (!$order || $order->status !== 0) {
+                DB::rollBack();
+                return true;
+            }
+            $this->order = $order;
+            $order->status = 1;
+            $order->paid_at = time();
+            $order->callback_no = $callbackNo;
+            if (!$order->save()) {
+                DB::rollBack();
+                return false;
+            }
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return false;
+        }
+        // 事务提交后再派发开通任务，避免 worker 在提交前读到旧状态
         try {
             OrderHandleJob::dispatch($order->trade_no);
         } catch (\Exception $e) {
@@ -274,20 +310,35 @@ class OrderService
     {
         $order = $this->order;
         DB::beginTransaction();
-        $order->status = 2;
-        if (!$order->save()) {
-            DB::rollBack();
-            return false;
-        }
-        if ($order->balance_amount) {
-            $userService = new UserService();
-            if (!$userService->addBalance($order->user_id, $order->balance_amount)) {
+        try {
+            // 事务内重新加锁查询订单，防止并发取消导致重复退款
+            // Eloquent save() 依据模型原始属性判断脏字段，仅加行锁会被串行化
+            // 为两次都成功的退款，必须在锁内重新读取并校验状态
+            $lockedOrder = Order::lockForUpdate()->find($order->id);
+            if (!$lockedOrder || $lockedOrder->status !== 0) {
                 DB::rollBack();
                 return false;
             }
+            // 同步内存中的订单对象，确保后续 save() 的原始属性反映加锁后的最新状态
+            $order->setRawAttributes($lockedOrder->getAttributes());
+            $order->status = 2;
+            if (!$order->save()) {
+                DB::rollBack();
+                return false;
+            }
+            if ($order->balance_amount) {
+                $userService = new UserService();
+                if (!$userService->addBalance($order->user_id, $order->balance_amount)) {
+                    DB::rollBack();
+                    return false;
+                }
+            }
+            DB::commit();
+            return true;
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return false;
         }
-        DB::commit();
-        return true;
     }
 
     private function setSpeedLimit($speedLimit)

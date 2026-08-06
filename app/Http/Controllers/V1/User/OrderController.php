@@ -215,8 +215,12 @@ class OrderController extends Controller
         if (!$order) {
             abort(500, __('Order does not exist or has been paid'));
         }
-        // free process
-        if ($order->total_amount <= 0) {
+        // 拒绝负金额订单，负数不应出现于任何合法路径
+        if ($order->total_amount < 0) {
+            abort(500, __('Order amount is abnormal, please contact customer service'));
+        }
+        // free process: 仅允许 total_amount === 0 的免费订单直接开通
+        if ($order->total_amount === 0) {
             $orderService = new OrderService($order);
             if (!$orderService->paid($order->trade_no)) abort(500, '');
             return response([

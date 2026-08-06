@@ -93,7 +93,8 @@ class CheckCommission extends Command
             ];
         }
         for ($l = 0; $l < $level; $l++) {
-            $inviter = User::find($inviteUserId);
+            // 加锁查询邀请人，防止余额/佣金的并发读改写竞态
+            $inviter = User::lockForUpdate()->find($inviteUserId);
             if (!$inviter) continue;
             if (!isset($commissionShareLevels[$l])) continue;
             $commissionBalance = $order->commission_balance * ($commissionShareLevels[$l] / 100);

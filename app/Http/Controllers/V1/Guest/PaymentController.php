@@ -17,7 +17,7 @@ class PaymentController extends Controller
             $paymentService = new PaymentService($method, null, $uuid);
             $verify = $paymentService->notify($request->input());
             if (!$verify) abort(500, 'verify error');
-            if (!$this->handle($verify['trade_no'], $verify['callback_no'])) {
+            if (!$this->handle($verify['trade_no'], $verify['callback_no'], $verify['amount'] ?? null)) {
                 abort(500, 'handle error');
             }
             return(isset($verify['custom_result']) ? $verify['custom_result'] : 'success');
@@ -26,13 +26,23 @@ class PaymentController extends Controller
         }
     }
 
-    private function handle($tradeNo, $callbackNo)
+    private function handle($tradeNo, $callbackNo, $callbackAmount = null)
     {
         $order = Order::where('trade_no', $tradeNo)->first();
         if (!$order) {
             abort(500, 'order is not found');
         }
         if ($order->status !== 0) return true;
+        // 金额校验：回调金额必须与订单应付金额（含手续费）完全一致
+        if ($callbackAmount !== null) {
+            $expectedAmount = $order->total_amount;
+            if ($order->handling_amount) {
+                $expectedAmount += $order->handling_amount;
+            }
+            if ($callbackAmount !== $expectedAmount) {
+                abort(500, 'amount mismatch');
+            }
+        }
         $orderService = new OrderService($order);
         if (!$orderService->paid($callbackNo)) {
             return false;
