@@ -8,6 +8,8 @@ use App\Services\TelegramService;
 use App\Services\TelegramSessionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class TelegramController extends Controller
 {
@@ -75,8 +77,9 @@ class TelegramController extends Controller
                     if (!isset($instance->callback)) continue;
                     if ($msg->callback_data !== $instance->callback
                         && strpos($msg->callback_data, $instance->callback . ':') !== 0) continue;
-                    $instance->handle($msg);
+                    // 匹配到处理器后立即应答，结束按钮转圈，避免用户等待中重复点击
                     $this->telegramService->answerCallbackQuery($msg->callback_query_id);
+                    $instance->handle($msg);
                     return;
                 }
                 $this->telegramService->answerCallbackQuery($msg->callback_query_id);
@@ -105,6 +108,15 @@ class TelegramController extends Controller
                         return;
                     }
                     $sessionService->forget($msg->chat_id);
+                } elseif ($msg->message_type !== 'reply_message'
+                    && !(is_string($msg->command) && strpos($msg->command, '/') === 0)) {
+                    // 无会话、非命令的普通文本：多为会话过期后迟到的验证码/密码等作答，
+                    // 静默丢弃会让用户误以为机器人无响应，且密码明文会残留在聊天记录
+                    $this->telegramService->sendMessage(
+                        $msg->chat_id,
+                        "没有正在进行的操作（操作会话约10分钟有效，可能已过期）。\n可发送 /start 或 /help 查看可用功能。"
+                    );
+                    return;
                 }
             }
 
@@ -122,12 +134,33 @@ class TelegramController extends Controller
                     return;
                 }
             }
+
+            // 私聊中收到未注册的斜杠命令（如 /help 之外的拼写错误）：给出引导而非静默
+            if ($msg->message_type === 'message' && $msg->is_private
+                && is_string($msg->command) && strpos($msg->command, '/') === 0) {
+                $this->telegramService->sendMessage($msg->chat_id, '未知命令，发送 /help 查看可用命令');
+            }
         } catch (\Exception $e) {
             if ($msg->message_type === 'callback_query') {
                 $this->telegramService->answerCallbackQuery($msg->callback_query_id);
             }
-            $this->telegramService->sendMessage($msg->chat_id, $e->getMessage());
+            $this->telegramService->sendMessage($msg->chat_id, $this->userFacingError($e));
         }
+    }
+
+    // 业务校验异常（abort 抛出的中文提示）直接透传；TG API/curl/DB 等系统异常统一兜底文案并记录日志
+    private function userFacingError(\Exception $e): string
+    {
+        if ($e instanceof HttpException
+            && is_string($e->getMessage()) && $e->getMessage() !== ''
+            && strpos($e->getMessage(), '来自TG的错误') !== 0) {
+            return $e->getMessage();
+        }
+        Log::warning('Telegram webhook handle error', [
+            'message' => $e->getMessage(),
+            'exception' => get_class($e)
+        ]);
+        return '操作失败，请稍后重试；若多次失败请联系客服';
     }
 
     private function getCommandInstances(): array

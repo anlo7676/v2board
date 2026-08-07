@@ -266,8 +266,8 @@ class TelegramOrderService
             if (!$orderService->cancel()) {
                 abort(500, '取消失败，请稍后再试');
             }
-            // 移除历史消息上残留的支付/取消按钮
-            self::clearPayMessages($tradeNo);
+            // 移除历史消息上残留的支付/取消按钮并追加取消状态行
+            self::clearPayMessages($tradeNo, '❌ 该订单已取消');
             return $order;
         } finally {
             $lock->release();
@@ -294,19 +294,26 @@ class TelegramOrderService
         $list[] = $pair;
         // 只保留最近3条，控制终态清理时的 TG 接口调用次数
         $list = array_slice($list, -3);
-        // TTL 需覆盖订单2小时未支付自动取消窗口
-        Cache::put($key, $list, 3 * 3600);
+        // TTL 需覆盖订单2小时未支付自动取消窗口及 OrderHandleJob 调度延迟，避免终态时缓存已过期导致按钮残留
+        Cache::put($key, $list, 26 * 3600);
     }
 
-    // 移除该订单历史消息上的支付按钮；Cache::pull 保证只清理一次，失败不影响主流程
-    public static function clearPayMessages(string $tradeNo): void
+    // 移除该订单历史消息上的支付按钮，并在原文末追加终态状态行让旧消息自解释；Cache::pull 保证只清理一次，失败不影响主流程
+    public static function clearPayMessages(string $tradeNo, string $statusNote = ''): void
     {
         $list = Cache::pull('TG_PAY_MSG_' . $tradeNo);
         if (!$list) return;
         $telegramService = new TelegramService();
         foreach ($list as $pair) {
             try {
-                $telegramService->editMessageReplyMarkup((int)$pair[0], (int)$pair[1]);
+                $chatId = (int)$pair[0];
+                $messageId = (int)$pair[1];
+                if ($statusNote !== '') {
+                    // 先在原文末追加终态状态行（同时移除键盘），让用户回看历史消息时明确订单结果
+                    $telegramService->appendMessageLine($chatId, $messageId, $statusNote);
+                } else {
+                    $telegramService->editMessageReplyMarkup($chatId, $messageId);
+                }
             } catch (\Exception $e) {
                 // 消息已被删除等场景忽略
             }

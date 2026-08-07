@@ -3,6 +3,7 @@ namespace App\Services;
 
 
 use App\Jobs\SendEmailJob;
+use App\Jobs\SendTelegramJob;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\User;
@@ -58,6 +59,7 @@ class TicketService {
         }
         DB::commit();
         $this->sendEmailNotify($ticket, $ticketMessage);
+        $this->sendTelegramNotify($ticket);
     }
 
     // 半小时内不再重复通知
@@ -77,6 +79,22 @@ class TicketService {
                     'content' => "主题：{$ticket->subject}\r\n回复内容：{$ticketMessage->message}"
                 ]
             ]);
+        }
+    }
+
+    // 工单回复 TG 通知：用户绑定 TG 且机器人开启时推送，与邮件共用半小时去重窗口（独立键）
+    private function sendTelegramNotify(Ticket $ticket): void
+    {
+        try {
+            if (!(int)config('v2board.telegram_bot_enable', 0)) return;
+            $user = User::find($ticket->user_id);
+            if (!$user || !$user->telegram_id) return;
+            $cacheKey = 'ticket_sendTelegramNotify_' . $ticket->user_id;
+            if (!Cache::add($cacheKey, 1, 1800)) return;
+            $text = "📮 工单回复提醒\n———————————————\n您的工单 #{$ticket->id}（{$ticket->subject}）有新的回复，请登录网站查看详情。";
+            SendTelegramJob::dispatch($user->telegram_id, $text, '');
+        } catch (\Exception $e) {
+            // 通知失败不影响工单回复主流程
         }
     }
 }

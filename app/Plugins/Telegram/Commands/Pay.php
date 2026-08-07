@@ -69,6 +69,13 @@ class Pay extends Telegram {
 
     private function checkout($message, User $user, string $tradeNo, int $paymentId)
     {
+        // 支付网关需同步外部 HTTP 调用，耗时较长：先切换为加载中间态（无键盘防重复点击），完成后再更新为结果
+        try {
+            $this->telegramService->editMessageText($message->chat_id, $message->message_id,
+                "订单号：{$tradeNo}\n正在发起支付，请稍候…");
+        } catch (\Exception $e) {
+            // 中间态更新失败不影响支付主流程
+        }
         $orderService = new TelegramOrderService();
         $result = $orderService->checkout($user, $tradeNo, $paymentId);
         $markup = $orderService->buildCheckoutMarkup($result);

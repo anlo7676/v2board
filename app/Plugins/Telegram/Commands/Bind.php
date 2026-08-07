@@ -4,8 +4,6 @@ namespace App\Plugins\Telegram\Commands;
 
 use App\Models\User;
 use App\Plugins\Telegram\Telegram;
-use App\Utils\Helper;
-use Illuminate\Support\Facades\Cache;
 
 class Bind extends Telegram {
     public $command = '/bind';
@@ -15,61 +13,18 @@ class Bind extends Telegram {
 
     public function handle($message, $match = []) {
         if (!$message->is_private) return;
-        if (!isset($message->args[0])) {
-            abort(500, '参数有误，请携带订阅地址发送');
+        if (!isset($message->args[0]) || trim($message->args[0]) === '') {
+            abort(500, "请携带订阅链接发送，例如：\n/bind https://example.com/api/v1/client/subscribe?token=xxxx\n也可在网站个人中心点击“绑定Telegram”一键完成绑定");
         }
-        $subscribeUrl = $message->args[0];
-        $subscribeUrl = parse_url($subscribeUrl);
-        parse_str($subscribeUrl['query'], $query);
-        $token = $query['token'];
-        if (!$token) {
-            abort(500, '订阅地址无效');
-        }
-        $submethod = (int)config('v2board.show_subscribe_method', 0);
-        switch ($submethod) {
-            case 0:
-                break;
-            case 1:
-                if (!Cache::has("otpn_{$token}")) {
-                    abort(403, 'token is error');
-                }
-                $usertoken = Cache::get("otpn_{$token}");
-                $token = $usertoken;
-                break;
-            case 2:
-                $usertoken = Cache::get("totp_{$token}");
-                if (!$usertoken) {
-                    $timestep = (int)config('v2board.show_subscribe_expire', 5) * 60;
-                    $counter = floor(time() / $timestep);
-                    $counterBytes = pack('N*', 0) . pack('N*', $counter);
-                    $idhash = Helper::base64DecodeUrlSafe($token);
-                    $parts = explode(':', $idhash, 2);
-                    [$userid, $clienthash] = $parts;
-                    if (!$userid || !$clienthash) {
-                        abort(403, 'token is error');
-                    }
-                    $user = User::where('id', $userid)->select('token')->first();
-                    if (!$user) {
-                        abort(403, 'token is error');
-                    }
-                    $usertoken = $user->token;
-                    $hash = hash_hmac('sha1', $counterBytes, $usertoken, false);
-                    if ($clienthash !== $hash) {
-                        abort(403, 'token is error');
-                    }
-                    Cache::put("totp_{$token}", $usertoken, $timestep);
-                }
-                $token = $usertoken;
-                break;
-            default:
-                break;
-        }
+        $token = $this->resolveSubscribeToken($message->args[0]);
         $user = User::where('token', $token)->first();
         if (!$user) {
-            abort(500, '用户不存在');
+            abort(500, '未找到该订阅对应的用户，请确认订阅链接无误');
+        }
+        if ($user->banned) {
+            abort(500, '该账户已被停止使用');
         }
         $this->bindTelegram($user, $message->chat_id);
-        $telegramService = $this->telegramService;
-        $telegramService->sendMessage($message->chat_id, '绑定成功');
+        $this->telegramService->sendMessage($message->chat_id, "绑定成功，当前账号：{$user->email}\n可发送 /help 查看可用功能");
     }
 }

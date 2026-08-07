@@ -6,9 +6,12 @@ use App\Models\User;
 use \Curl\Curl;
 use Illuminate\Mail\Markdown;
 
+// 用户侧不可达（拉黑机器人/账号注销等），队列任务识别后不再重试
+class TelegramUserUnreachableException extends \Exception {}
+
 class TelegramService {
     // 命令菜单版本：命令增删/排序/可见范围等菜单结构变更时递增，已绑定用户下次私聊交互会自动重新下发会话菜单
-    const MENU_VERSION = '4';
+    const MENU_VERSION = '5';
     protected $api;
 
     public function __construct($token = '')
@@ -99,6 +102,27 @@ class TelegramService {
             ]);
         } catch (\Exception $e) {
             // 删除失败不影响主流程
+        }
+    }
+
+    // 在既有消息末尾追加一行文本并移除内联键盘（用于订单终态标注历史支付消息）
+    public function appendMessageLine(int $chatId, int $messageId, string $line)
+    {
+        try {
+            $message = $this->request('getMessage', [
+                'chat_id' => $chatId,
+                'message_id' => $messageId
+            ]);
+            $text = $message->result->text ?? '';
+            if ($text === '') return;
+            // 已追加过同一状态行时不重复编辑
+            if (mb_strpos($text, $line) !== false) {
+                $this->editMessageReplyMarkup($chatId, $messageId);
+                return;
+            }
+            $this->editMessageText($chatId, $messageId, $text . "\n" . $line);
+        } catch (\Exception $e) {
+            // 消息已被删除/无权限编辑等场景忽略
         }
     }
 
@@ -264,7 +288,14 @@ class TelegramService {
         $curl->close();
         if (!isset($response->ok)) abort(500, '请求失败');
         if (!$response->ok) {
-            abort(500, '来自TG的错误：' . $response->description);
+            $description = $response->description ?? '';
+            // 用户拉黑机器人/账号停用：消息永远送不达，抛出专用异常供队列任务识别后放弃重试
+            if (stripos($description, 'bot was blocked by the user') !== false
+                || stripos($description, 'user is deactivated') !== false
+                || stripos($description, 'chat not found') !== false) {
+                throw new TelegramUserUnreachableException($description);
+            }
+            abort(500, '来自TG的错误：' . $description);
         }
         return $response;
     }

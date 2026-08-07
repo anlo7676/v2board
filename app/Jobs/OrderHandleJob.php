@@ -68,9 +68,10 @@ class OrderHandleJob implements ShouldQueue
         if (!(int)config('v2board.telegram_bot_enable', 0)) return;
         $user = User::find($order->user_id);
         if (!$user || !$user->telegram_id) return;
-        // 订单已到终态，移除历史消息上残留的支付/取消按钮，避免误点
+        // 订单已到终态，移除历史消息上残留的支付/取消按钮并追加终态状态行，避免误点
         try {
-            TelegramOrderService::clearPayMessages($order->trade_no);
+            $statusNote = $event === 'opened' ? '✅ 该订单已支付开通' : '⏰ 该订单已超时取消';
+            TelegramOrderService::clearPayMessages($order->trade_no, $statusNote);
         } catch (\Exception $e) {
             // 清理失败不影响通知主流程
         }
@@ -79,9 +80,16 @@ class OrderHandleJob implements ShouldQueue
         $text = $event === 'opened'
             ? TelegramOrderService::buildOpenedNotification($order, $user)
             : TelegramOrderService::buildCanceledNotification($order);
+        // 开通成功通知附下一步操作按钮，用户无需手打命令
+        $markup = null;
+        if ($event === 'opened') {
+            $markup = ['inline_keyboard' => [
+                [['text' => '获取订阅链接', 'callback_data' => 'subscribe'], ['text' => '查看流量', 'callback_data' => 'traffic']]
+            ]];
+        }
         try {
             // 纯文本发送，避免套餐名含 markdown 元字符导致通知解析失败
-            SendTelegramJob::dispatch($user->telegram_id, $text, '');
+            SendTelegramJob::dispatch($user->telegram_id, $text, '', $markup);
         } catch (\Exception $e) {
             // 通知入队失败不影响订单开通/取消主流程
         }
